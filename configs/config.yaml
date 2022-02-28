@@ -1,0 +1,17 @@
+sqlite:
+  dir_path: "./sqlite"
+  db_filename: "to2cloud.db"
+mysql:
+mongo:
+  host: "mongo"
+  port: "27017"
+redis:
+log:
+  dir_path: "./log"
+  file_name: "app.log"
+  level: "debug"
+  max_size: 0
+jwt:
+  key: "asetoftypedefinitions"
+ansible:
+  dir_path: "./ansible-playbooks"
