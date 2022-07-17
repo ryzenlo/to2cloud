@@ -2,9 +2,9 @@ package http
 
 import (
 	"fmt"
+	"net/http"
 	"ryzenlo/to2cloud/internal/models"
 	"ryzenlo/to2cloud/internal/pkg/auth"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,6 +18,19 @@ func isLogin() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		userInfo, err := auth.GetDataFromToken(t)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": http.StatusUnauthorized, "msg": fmt.Sprintf("%v", err)})
+			c.Abort()
+			return
+		}
+		userID, ok := userInfo["user_id"].(float64)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": http.StatusUnauthorized, "msg": "failed to get user id"})
+			c.Abort()
+			return
+		}
+		c.Set("user_id", int(userID))
 		c.Next()
 	}
 }

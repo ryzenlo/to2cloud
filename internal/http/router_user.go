@@ -2,9 +2,9 @@ package http
 
 import (
 	"fmt"
+	"net/http"
 	"ryzenlo/to2cloud/internal/models"
 	"ryzenlo/to2cloud/internal/pkg/auth"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
@@ -64,5 +64,11 @@ func userLogin(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("%v", err)})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": gin.H{"token": token}})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "", "data": gin.H{"token": token}})
+}
+
+func GetUser(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	user := models.GetUserByUserID(userID.(int))
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "", "data": user})
 }

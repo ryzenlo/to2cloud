@@ -3,8 +3,8 @@ package http
 import (
 	"encoding/json"
 	"fmt"
-	"ryzenlo/to2cloud/internal/models"
 	"net/http"
+	"ryzenlo/to2cloud/internal/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -88,7 +88,6 @@ func EditProvider(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "Such provider exists"})
 			return
 		}
-		return
 	}
 	cloudProvier.Account = providerParam.Account
 	cloudProvier.APIConfig = apiConfig
@@ -96,6 +95,7 @@ func EditProvider(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "Such provider exists"})
 		return
 	}
+	//TODO refresh the pkg-level instances in pkg/cloud
 	c.JSON(http.StatusOK, SuccessOperationResponse)
 }
 
@@ -114,8 +114,8 @@ func formCloudConfigFromRequestParam(param *ProviderParam) (string, error) {
 	var configBytes []byte
 	var err error
 	if param.Type == models.CLOUDPROVIDER_TYPE_CDN {
-		if param.CloudflareConfig.APIKey == "" || param.CloudflareConfig.Email == "" {
-			return config, fmt.Errorf("for cloud flare api, you need to provide apikey and email")
+		if param.CloudflareConfig.APIKey == "" || param.CloudflareConfig.Email == "" || param.CloudflareConfig.CAKey == "" {
+			return config, fmt.Errorf("for cloud flare api, you need to provide apikey and email and orign ca key")
 		}
 		configBytes, err = json.Marshal(param.CloudflareConfig)
 	} else if param.Type == models.CLOUDPROVIDER_TYPE_VPS {

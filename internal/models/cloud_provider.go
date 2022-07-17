@@ -52,6 +52,7 @@ type VultrAPIConfig struct {
 
 type CloudflareAPIConfig struct {
 	APIKey string `json:"api_key"`
+	CAKey  string `json:"ca_key"`
 	Email  string `json:"email"`
 }
 
@@ -78,13 +79,14 @@ func (CloudProvider) TableName() string {
 
 func GetListBy(typeName, name string) []CloudProvider {
 	var providers []CloudProvider
+	tx := DBClient.Model(&CloudProvider{})
 	if typeName != "" {
-		DBClient.Where("type = ?", typeName)
+		tx.Where("type = ?", typeName)
 	}
 	if name != "" {
-		DBClient.Where("name = ?", name)
+		tx.Where("name = ?", name)
 	}
-	DBClient.Find(&providers)
+	tx.Find(&providers)
 	return providers
 }
 

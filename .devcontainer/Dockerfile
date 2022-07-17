@@ -17,6 +17,8 @@ RUN if [ "${INSTALL_NODE}" = "true" ]; then su vscode -c "source /usr/local/shar
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add -
+
 RUN  apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 93C4A3FD7BB9C367 && \
      apt-get update && apt-get install -y ansible openssh-client netcat-openbsd sqlite3 && \
      rm -rf /var/lib/apt/lists/* && apt-get clean

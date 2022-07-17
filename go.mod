@@ -7,6 +7,7 @@ require (
 	github.com/caarlos0/env/v6 v6.7.2 // indirect
 	github.com/cloudflare/cloudflare-go v0.31.0
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
+	github.com/gin-contrib/cors v1.3.1
 	github.com/gin-gonic/gin v1.7.4
 	github.com/sirupsen/logrus v1.8.1
 	github.com/vultr/govultr/v2 v2.14.0

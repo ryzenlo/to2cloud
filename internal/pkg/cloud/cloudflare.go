@@ -23,6 +23,7 @@ func GetCloudflare(apiConfig *models.CloudflareAPIConfig) *Cloudflare {
 
 func newCloudflare(apiConfig *models.CloudflareAPIConfig) *Cloudflare {
 	api, err := cloudflare.New(apiConfig.APIKey, apiConfig.Email)
+	api.APIUserServiceKey = apiConfig.CAKey
 	if err != nil {
 		return nil
 	}

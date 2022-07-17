@@ -52,3 +52,15 @@ CREATE TABLE IF NOT EXISTS `ansible_ops_logs`
     `created_at`  INTEGER NOT NULL default 0,
     `updated_at`  INTEGER NOT NULL default 0
 )
+
+CREATE TABLE IF NOT EXISTS `rsa_keys`
+(
+    `id`  INTEGER PRIMARY KEY AUTOINCREMENT,
+    `type` INTEGER NOT NULL default 0,
+    `name` VARCHAR(48) NOT NULL,
+    `private_key`  VARCHAR(4096) NOT NULL,
+    `public_key` VARCHAR(4096) NOT NULL,
+    `csr_subject` VARCHAR(4096) NOT NULL,
+    `csr_cert` VARCHAR(4096) NOT NULL,
+    `created_at`  INTEGER NOT NULL default 0
+)

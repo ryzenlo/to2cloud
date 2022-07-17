@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io/ioutil"
 
-	"ryzenlo/to2cloud/configs"
-	"ryzenlo/to2cloud/internal/pkg/log"
 	"os"
 	"os/exec"
+	"ryzenlo/to2cloud/configs"
+	"ryzenlo/to2cloud/internal/pkg/log"
 	"strings"
 )
 
@@ -39,7 +39,7 @@ var ProxyCommandValueMap = map[string]string{
 	"default": "nc -x %s:%s %%h %%p",
 }
 
-func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig configs.ProxyConfig) (*PlayCmd, error) {
+func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig configs.ProxyConfig, extraVars map[string]string) (*PlayCmd, error) {
 	playCmd := &PlayCmd{
 		inventory:        i,
 		cmdExecutor:      &exec.Cmd{},
@@ -97,6 +97,7 @@ func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig
 		playCmd.tmpSSHPrivate.Name(),
 		false,
 		false,
+		extraVars,
 	)
 	playCmd.cmdExecutor.Args = strings.Split(playCmd.fullCmd, " ")
 	playCmd.cmdExecutor.Env = []string{"ANSIBLE_HOST_KEY_CHECKING=False"}
@@ -108,6 +109,7 @@ func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig
 		playCmd.tmpSSHPrivate.Name(),
 		true,
 		false,
+		extraVars,
 	)
 	playCmd.checkCmdExecutor.Args = strings.Split(playCmd.checkSyntaxCmd, " ")
 	playCmd.checkCmdExecutor.Env = []string{"ANSIBLE_HOST_KEY_CHECKING=False"}
@@ -136,7 +138,7 @@ func GetPlayBookCmdPathName() (string, error) {
 	return exec.LookPath("ansible-playbook")
 }
 
-func GeneratePlaybookCommand(cmdPath, playbookPath, inventoryPath, privateKeyPath string, syntaxChecking, hostKeyChecking bool) string {
+func GeneratePlaybookCommand(cmdPath, playbookPath, inventoryPath, privateKeyPath string, syntaxChecking, hostKeyChecking bool, extraVars map[string]string) string {
 	fullCmd := fmt.Sprintf(
 		"%s %s -i %s --private-key %s",
 		cmdPath,
@@ -149,6 +151,10 @@ func GeneratePlaybookCommand(cmdPath, playbookPath, inventoryPath, privateKeyPat
 	}
 	if hostKeyChecking {
 		fullCmd = fmt.Sprintf("%s %s", "ANSIBLE_HOST_KEY_CHECKING=False", fullCmd)
+	}
+	extraVarsContent := formExtraVarsContent(extraVars)
+	if extraVarsContent != "" {
+		fullCmd = fmt.Sprintf("%s %s", fullCmd, extraVarsContent)
 	}
 	return fullCmd
 }
@@ -198,6 +204,23 @@ func (cmd *PlayCmd) GetKeyContent() string {
 
 func (cmd *PlayCmd) GetPlayBookContent() string {
 	return cmd.playBookContent
+}
+
+func formExtraVarsContent(extraVars map[string]string) string {
+	if extraVars == nil {
+		return ""
+	}
+	content := "--extra-vars \"%s\""
+	kvPair := []string{}
+	for k, v := range extraVars {
+		if strings.Contains(v, " ") {
+			kvPair = append(kvPair, fmt.Sprintf("%s='%s'", k, v))
+		} else {
+			kvPair = append(kvPair, fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+	content = fmt.Sprintf(content, strings.Join(kvPair, " "))
+	return content
 }
 
 func (cmd *PlayCmd) Clean() {

@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"ryzenlo/to2cloud/configs"
 	"ryzenlo/to2cloud/internal/models"
 	"ryzenlo/to2cloud/internal/pkg/ansible"
 	"ryzenlo/to2cloud/internal/pkg/cloud"
 	"ryzenlo/to2cloud/internal/pkg/log"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -94,7 +94,29 @@ func addVultrSSHKey(c *gin.Context) {
 	}
 	apiResponse, _ := json.Marshal(sshkey)
 	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, string(requestBody), string(apiResponse))
-	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": apiResponse})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": sshkey})
+}
+
+func delVultrSSHKey(c *gin.Context) {
+	vl, cloudProvider, err := getVultr(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	var sshKeyURIParam struct {
+		ID string `uri:"sshkey_id" binding:"required"`
+	}
+	if err := c.ShouldBindUri(&sshKeyURIParam); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	if err := vl.SSHKey.Delete(context.Background(), sshKeyURIParam.ID); err != nil {
+		logAPICall(c, cloudProvider, models.APICALL_FAILED, "", err.Error())
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("something went wrong when calling vultr api,%s", err.Error())})
+		return
+	}
+	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, "", "")
+	c.JSON(http.StatusOK, SuccessOperationResponse)
 }
 
 func getVultrSnapshots(c *gin.Context) {
@@ -161,6 +183,10 @@ func createVultrInstance(c *gin.Context) {
 	}
 	//
 	var instanceReq struct {
+		OSID        int    `json:"os_id" binding:"required"`
+		Plan        string `json:"plan" binding:"required"`
+		Region      string `json:"region" binding:"required"`
+		SSHKeyID    string `json:"ssh_key_id" binding:"required"`
 		InstalledBy string `json:"installed_by" binding:"required"`
 		SnapshotID  string `json:"snapshot_id"`
 	}
@@ -174,9 +200,10 @@ func createVultrInstance(c *gin.Context) {
 		return
 	}
 	instanceOptions := &govultr.InstanceCreateReq{
-		OsID:    387, //ubuntu_20.04,defualt installed by os id
-		Plan:    "vc2-1c-1gb",
-		Region:  "lax",
+		OsID:    instanceReq.OSID,
+		Plan:    instanceReq.Plan,
+		Region:  instanceReq.Region,
+		SSHKeys: []string{instanceReq.SSHKeyID},
 		Backups: "disabled",
 	}
 	if instanceReq.InstalledBy == models.OS_INSTALLED_BY_SNAPSHOT {
@@ -188,10 +215,6 @@ func createVultrInstance(c *gin.Context) {
 		}
 		instanceOptions.OsID = 0
 		instanceOptions.SnapshotID = snapshot.ID
-	}
-	//TODO require a lock
-	if vl.APIConfig.SSHKeyID != "" {
-		instanceOptions.SSHKeys = []string{vl.APIConfig.SSHKeyID}
 	}
 	//log call operation
 	requestBody, _ := json.Marshal(instanceOptions)
@@ -208,6 +231,37 @@ func createVultrInstance(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": instance})
 }
 
+func updateVultrInstance(c *gin.Context) {
+	vl, cloudProvider, err := getVultr(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	var vultrParam VultrInstanceURIParam
+	if err := c.ShouldBindUri(&vultrParam); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	var instanceReq struct {
+		Label string `json:"label" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&instanceReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	patchReq := &govultr.InstanceUpdateReq{Label: instanceReq.Label}
+	requestBody, _ := json.Marshal(patchReq)
+	instance, err := vl.Instance.Update(context.Background(), vultrParam.InstanceID, patchReq)
+	if err != nil {
+		logAPICall(c, cloudProvider, models.APICALL_FAILED, string(requestBody), err.Error())
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("something went wrong when calling vultr api,%s", err.Error())})
+		return
+	}
+	apiResponse, _ := json.Marshal(instance)
+	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, string(requestBody), string(apiResponse))
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": instance})
+}
+
 func delVultrInstance(c *gin.Context) {
 	vl, cloudProvider, err := getVultr(c)
 	if err != nil {
@@ -221,7 +275,7 @@ func delVultrInstance(c *gin.Context) {
 	}
 	if err := vl.Instance.Delete(context.Background(), vultrParam.InstanceID); err != nil {
 		logAPICall(c, cloudProvider, models.APICALL_FAILED, "", err.Error())
-		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "something went wrong when calling vultr api"})
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("something went wrong when calling vultr api,%s", err.Error())})
 		return
 	}
 	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, "", "")
@@ -270,7 +324,7 @@ func runPlaybookOnVultrInstance(c *gin.Context) {
 		User:          "root",
 		SSHPrivateKey: vl.APIConfig.SSHPrivateKey,
 	}
-	cmd, err := ansible.NewPlayCmd(configs.Conf, req.PlaybookName, inventory, req.ProxyConfig)
+	cmd, err := ansible.NewPlayCmd(configs.Conf, req.PlaybookName, inventory, req.ProxyConfig, nil)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("something went wrong when creating ansible playbook command,%v", err)})
 		return
