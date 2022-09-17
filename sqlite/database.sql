@@ -28,6 +28,18 @@ CREATE TABLE IF NOT EXISTS `cloud_provider`
     `updated_at`    INTEGER NOT NULL default 0
 )
 
+CREATE TABLE IF NOT EXISTS `cloud_provider_vps`
+(
+    `id`  INTEGER PRIMARY KEY AUTOINCREMENT,
+    `cloud_provider_id` INTEGER NOT NULL,
+    `instance_id` VARCHAR(48) NOT NULL,
+    `local_rsa_key_id` INTEGER NOT NULL,
+    `cdn_info` VARCHAR(1024),
+    `status` VARCHAR(16) NOT NULL,
+    `created_at`  INTEGER NOT NULL default 0,
+    `updated_at`    INTEGER NOT NULL default 0
+)
+
 CREATE TABLE IF NOT EXISTS`cloud_provider_ops_logs`
 (
     `id`  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,8 +56,10 @@ CREATE TABLE IF NOT EXISTS `ansible_ops_logs`
     `id`  INTEGER PRIMARY KEY AUTOINCREMENT,
     `cloud_provider_id` INTEGER NOT NULL,
     `instance_id` VARCHAR(64) NOT NULL,
-    `ansible_playbook` VARCHAR(512) NOT NULL,
+    `ansible_playbook_name` VARCHAR(128) NOT NULL,
+    `ansible_playbook_content` VARCHAR(512) NOT NULL,
     `ansible_host_config` VARCHAR(128) NOT NULL,
+    `ansible_extra_variables` VARCHAR(512) NOT NULL,
     `play_cmd` VARCHAR(512) NOT NULL,
     `play_result` VARCHAR(512) NOT NULL,
     `status`  VARCHAR(32) NOT NULL,
@@ -60,7 +74,22 @@ CREATE TABLE IF NOT EXISTS `rsa_keys`
     `name` VARCHAR(48) NOT NULL,
     `private_key`  VARCHAR(4096) NOT NULL,
     `public_key` VARCHAR(4096) NOT NULL,
+    `cloud_ssh_subject` VARCHAR(512) NOT NULL,
     `csr_subject` VARCHAR(4096) NOT NULL,
     `csr_cert` VARCHAR(4096) NOT NULL,
+    `created_at`  INTEGER NOT NULL default 0
+    `updated_at`  INTEGER NOT NULL default 0
+)
+
+CREATE TABLE IF NOT EXISTS `cloud_provider_ssl_certs`
+(
+    `id`  INTEGER PRIMARY KEY AUTOINCREMENT,
+    `cloud_provider_id` INTEGER NOT NULL,
+    `zone_id` VARCHAR(64) NOT NULL,
+    `local_rsa_key_id` INTEGER NOT NULL,
+    `certificate_id`  VARCHAR(64) NOT NULL,
+    `certificate` VARCHAR(4096) NOT NULL,
+    `host_names` VARCHAR(128) NOT NULL,
+    `expires_on` INTEGER NOT NULL default 0,
     `created_at`  INTEGER NOT NULL default 0
 )

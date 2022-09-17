@@ -41,7 +41,7 @@ func CreateRSAKey(c *gin.Context) {
 		CSR = true
 	}
 	//
-	param.KeyBits = 1024
+	param.KeyBits = 2048
 	keyPair, err := util.GeneKeyPair(param.KeyBits, CSR, param.SubjectParam)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 1, "msg": err.Error()})

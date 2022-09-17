@@ -8,11 +8,19 @@ import (
 var SuccessOperationResponse = gin.H{"code": 0, "msg": "success"}
 
 func setupRoutes(r *gin.Engine) {
-	r.POST("/login", userLogin)
+	// static files
+	r.StaticFile("", "./public/index.html")
+	r.Static("/static", "./public/static")
+	r.StaticFile("index.html", "./public/index.html")
+	r.StaticFile("favicon.ico", "../public/favicon.ico")
+	//
+	apiGroup := r.Group("api")
+	apiGroup.POST("/login", userLogin)
 	//
 	r.Use(cors.Default())
 	//
-	needAuth := r.Group("/")
+	needAuth := apiGroup.Group("")
+
 	needAuth.Use(isLogin())
 	{
 		//
@@ -33,6 +41,7 @@ func setupRoutes(r *gin.Engine) {
 		needAuth.POST("/rsa_key", CreateRSAKey)
 		needAuth.DELETE("/rsa_key/:id", DeleteRSAKey)
 		//
+		needAuth.GET("/local_vps/cloud_provider/:id/vultr/instance/:instance_id", GetLocalVPS)
 		//vultr
 		needAuth.GET("/cloud_provider/:id/vultr/check", checkVultrAPI)
 		needAuth.GET("/cloud_provider/:id/vultr/account", getVultrAccount)
@@ -46,7 +55,7 @@ func setupRoutes(r *gin.Engine) {
 		needAuth.POST("/cloud_provider/:id/vultr/instance/:instance_id/snapshot", createVultrInstanceSnapshot)
 		needAuth.DELETE("/cloud_provider/:id/vultr/instance/:instance_id", delVultrInstance)
 		//run ansible
-		needAuth.GET("/cloud_provider/:id/vultr/ansible/ops_logs", getRunPlaybookLogs)
+		needAuth.GET("/cloud_provider/:id/vultr/instance/:instance_id/ansible/ops/logs", getAnsibleOpsLogs)
 		needAuth.POST("/cloud_provider/:id/vultr/instance/:instance_id/ansible/ops", runPlaybookOnVultrInstance)
 		//cloudflare
 		needAuth.GET("/cloud_provider/:id/cloudflare/check", checkCloudflareAPI)
@@ -59,5 +68,18 @@ func setupRoutes(r *gin.Engine) {
 		//
 		needAuth.GET("/cloud_provider/:id/cloudflare/zones/:zone_id/certificates", getCloudflareCertificates)
 		needAuth.POST("/cloud_provider/:id/cloudflare/zones/:zone_id/certificates", createCloudflareCertificate)
+		//
+		needAuth.GET("/cloud_provider/:id/cloudflare/zones/:zone_id/settings/ssl", getCloudflareSSLSetting)
+		needAuth.PATCH("/cloud_provider/:id/cloudflare/zones/:zone_id/settings/ssl", updateCloudflareSSLSetting)
+		//
+		needAuth.GET("/cloud_provider/:id/godaddy/check", checkGodaddyAPI)
+		needAuth.GET("/cloud_provider/:id/godaddy/domains", getGodaddyDomains)
+		needAuth.PATCH("/cloud_provider/:id/godaddy/domains/:domain", editGodaddyDomain)
+		//get ansible plabook
+		needAuth.GET("/ansible-playbooks", getAnsiblePlayBooks)
+		needAuth.GET("/ansible-playbook/:filename", getAnsiblePlayBook)
+		needAuth.POST("/ip/:ip/ping", pingIP)
+		needAuth.POST("/ssh/connection/check", checkSSHConection)
+
 	}
 }

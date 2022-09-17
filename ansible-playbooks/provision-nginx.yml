@@ -1,34 +1,30 @@
 - hosts: all
   become: yes
   vars:
-    certificate_filenames:
-      - xyz.key
-      - xyz.pem
     nginx_vhosts:
       - listen: "443 ssl http2"
-        server_name: "example.xyz"
-        root: "/var/www/example.xyz"
+        server_name: "{{hostname}}"
+        root: "/var/www/{{hostname}}"
         index: "index.php index.html index.htm"
         state: "present"
-        template: "{{ nginx_vhost_template }}"
-        filename: "example.xyz.conf"
+        filename: "{{hostname}}.conf"
         nginx_remove_default_vhost: true
         extra_parameters: |
-          ssl_certificate     /etc/ssl/certs/ssl-cert-cf-example-xyz.pem;
-          ssl_certificate_key /etc/ssl/private/ssl-cert-cf-example-xyz.key;
-          ssl_protocols       TLSv1.1 TLSv1.2;
+          ssl_certificate     /etc/ssl/certs/ssl-cert-{{hostname}}.pem;
+          ssl_certificate_key /etc/ssl/private/ssl-cert-{{hostname}}.key;
+          ssl_protocols       TLSv1.2;
           ssl_ciphers         HIGH:!aNULL:!MD5;
 
   tasks:
     - name: Upload SSL certificate files
       ansible.builtin.copy:
-        src: "./ssl/xyz.pem"
-        dest: /etc/ssl/certs/ssl-cert-cf-example-xyz.pem
+        src: "{{cert_path}}"
+        dest: "/etc/ssl/certs/ssl-cert-{{hostname}}.pem"
 
     - name: Upload SSL certificate key files
       ansible.builtin.copy:
-        src: "./ssl/xyz.key"
-        dest: /etc/ssl/private/ssl-cert-cf-example-xyz.key
+        src: "{{private_key_path}}"
+        dest: "/etc/ssl/private/ssl-cert-{{hostname}}.key"
         
     - name: Install Nginx
       include_role:
@@ -36,14 +32,14 @@
 
     - name: Ensure site home directory exists.
       file:
-        path: /var/www/example.xyz
+        path: "/var/www/{{hostname}}"
         state: directory
         mode: 0755
 
     - name: Upload a welcome page
       ansible.builtin.template:
         src: ./template/welcome.html.j2
-        dest: /var/www/example.xyz/index.html
+        dest: "/var/www/{{hostname}}/index.html"
 
     - name: allow https port in the server
       ansible.builtin.command: ufw allow https

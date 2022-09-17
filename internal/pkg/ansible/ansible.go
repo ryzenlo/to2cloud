@@ -2,6 +2,7 @@ package ansible
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -10,7 +11,6 @@ import (
 	"os/exec"
 	"ryzenlo/to2cloud/configs"
 	"ryzenlo/to2cloud/internal/pkg/log"
-	"strings"
 )
 
 const TempFilePrefix = "ansible"
@@ -29,6 +29,7 @@ type PlayCmd struct {
 	checkSyntaxCmd   string
 	inventory        Inventory
 	playBookContent  string
+	extraVars        map[string]string
 	tmpInventory     *os.File
 	tmpSSHPrivate    *os.File
 }
@@ -44,6 +45,7 @@ func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig
 		inventory:        i,
 		cmdExecutor:      &exec.Cmd{},
 		checkCmdExecutor: &exec.Cmd{},
+		extraVars:        extraVars,
 	}
 	//
 	var err error
@@ -58,10 +60,15 @@ func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig
 	}
 	playCmd.playBookContent = string(rawPlayBook)
 
-	var cmdPath string
+	var cmdPath, bashPath string
 	if cmdPath, err = GetPlayBookCmdPathName(); err != nil {
 		return nil, err
 	}
+
+	if bashPath, err = GetBashCmdPathName(); err != nil {
+		return nil, err
+	}
+
 	//tmp file for inventory
 	if playCmd.tmpInventory, err = ioutil.TempFile("/tmp", fmt.Sprintf("%s_inventory_", TempFilePrefix)); err != nil {
 		return nil, fmt.Errorf("cannot create temporary inventory file,%w", err)
@@ -79,7 +86,6 @@ func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig
 		return nil, fmt.Errorf("cannot create temporary ssh private file,%w", err)
 	}
 	//
-	log.Logger.Debugf("ssh private key\n%s", i.SSHPrivateKey)
 	if _, err = playCmd.tmpSSHPrivate.WriteString(i.SSHPrivateKey); err != nil {
 		return nil, fmt.Errorf("cannot write temporary ssh private file,%w", err)
 	}
@@ -87,8 +93,8 @@ func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig
 		return nil, fmt.Errorf("cannot write temporary ssh private file,%w", err)
 	}
 	//
-	playCmd.cmdExecutor.Path = cmdPath
-	playCmd.checkCmdExecutor.Path = cmdPath
+	playCmd.cmdExecutor.Path = bashPath
+	playCmd.checkCmdExecutor.Path = bashPath
 	//
 	playCmd.fullCmd = GeneratePlaybookCommand(
 		cmdPath,
@@ -97,9 +103,9 @@ func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig
 		playCmd.tmpSSHPrivate.Name(),
 		false,
 		false,
-		extraVars,
+		playCmd.extraVars,
 	)
-	playCmd.cmdExecutor.Args = strings.Split(playCmd.fullCmd, " ")
+	playCmd.cmdExecutor.Args = []string{bashPath, "-c", playCmd.fullCmd}
 	playCmd.cmdExecutor.Env = []string{"ANSIBLE_HOST_KEY_CHECKING=False"}
 	//
 	playCmd.checkSyntaxCmd = GeneratePlaybookCommand(
@@ -109,11 +115,10 @@ func NewPlayCmd(c *configs.Config, playbookName string, i Inventory, proxyConfig
 		playCmd.tmpSSHPrivate.Name(),
 		true,
 		false,
-		extraVars,
+		playCmd.extraVars,
 	)
-	playCmd.checkCmdExecutor.Args = strings.Split(playCmd.checkSyntaxCmd, " ")
+	playCmd.checkCmdExecutor.Args = []string{bashPath, "-c", playCmd.checkSyntaxCmd}
 	playCmd.checkCmdExecutor.Env = []string{"ANSIBLE_HOST_KEY_CHECKING=False"}
-
 	return playCmd, nil
 }
 
@@ -138,6 +143,10 @@ func GetPlayBookCmdPathName() (string, error) {
 	return exec.LookPath("ansible-playbook")
 }
 
+func GetBashCmdPathName() (string, error) {
+	return exec.LookPath("bash")
+}
+
 func GeneratePlaybookCommand(cmdPath, playbookPath, inventoryPath, privateKeyPath string, syntaxChecking, hostKeyChecking bool, extraVars map[string]string) string {
 	fullCmd := fmt.Sprintf(
 		"%s %s -i %s --private-key %s",
@@ -146,15 +155,15 @@ func GeneratePlaybookCommand(cmdPath, playbookPath, inventoryPath, privateKeyPat
 		inventoryPath,
 		privateKeyPath,
 	)
+	extraVarsContent := formExtraVarsContent(extraVars)
+	if extraVarsContent != "" {
+		fullCmd = fmt.Sprintf("%s %s", fullCmd, extraVarsContent)
+	}
 	if syntaxChecking {
 		fullCmd = fmt.Sprintf("%s %s", fullCmd, "--syntax-check")
 	}
 	if hostKeyChecking {
 		fullCmd = fmt.Sprintf("%s %s", "ANSIBLE_HOST_KEY_CHECKING=False", fullCmd)
-	}
-	extraVarsContent := formExtraVarsContent(extraVars)
-	if extraVarsContent != "" {
-		fullCmd = fmt.Sprintf("%s %s", fullCmd, extraVarsContent)
 	}
 	return fullCmd
 }
@@ -167,9 +176,9 @@ func (cmd *PlayCmd) CheckPlaybookSyntax() error {
 	cmd.checkCmdExecutor.Stdout = &out
 	cmd.checkCmdExecutor.Stderr = &out
 	err := cmd.checkCmdExecutor.Run()
-	log.Logger.Infof("run playbook command: %s", cmd.checkCmdExecutor.String())
+	log.Logger.Debugf("check run playbook command: %s", cmd.checkCmdExecutor.String())
 	if err != nil {
-		log.Logger.Infof("check playbook syntax command failed: %s,%s", cmd.checkCmdExecutor.String(), out.String())
+		log.Logger.Infof("check playbook syntax command failed: %s", out.String())
 	}
 	return err
 }
@@ -181,7 +190,7 @@ func (cmd *PlayCmd) Run() (string, error) {
 	var out bytes.Buffer
 	cmd.cmdExecutor.Stdout = &out
 	cmd.cmdExecutor.Stderr = &out
-	log.Logger.Infof("run playbook command: %s", cmd.cmdExecutor.String())
+	log.Logger.Debugf("run playbook command: %s", cmd.cmdExecutor.String())
 	if err := cmd.cmdExecutor.Run(); err != nil {
 		return "", fmt.Errorf("%w,%s", err, out.String())
 	}
@@ -206,20 +215,26 @@ func (cmd *PlayCmd) GetPlayBookContent() string {
 	return cmd.playBookContent
 }
 
+func (cmd *PlayCmd) GetAnsibleExtraVariables() string {
+	if cmd.extraVars == nil {
+		return ""
+	}
+	raw, err := json.Marshal(cmd.extraVars)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
 func formExtraVarsContent(extraVars map[string]string) string {
 	if extraVars == nil {
 		return ""
 	}
-	content := "--extra-vars \"%s\""
-	kvPair := []string{}
-	for k, v := range extraVars {
-		if strings.Contains(v, " ") {
-			kvPair = append(kvPair, fmt.Sprintf("%s='%s'", k, v))
-		} else {
-			kvPair = append(kvPair, fmt.Sprintf("%s=%s", k, v))
-		}
+	raw, err := json.Marshal(extraVars)
+	if err != nil {
+		return ""
 	}
-	content = fmt.Sprintf(content, strings.Join(kvPair, " "))
+	content := fmt.Sprintf("-e '%s'", string(raw))
 	return content
 }
 

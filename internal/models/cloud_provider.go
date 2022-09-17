@@ -12,7 +12,7 @@ const (
 )
 
 const (
-	PROVIDER_GODDAY     = "goddy"
+	PROVIDER_GODDAY     = "godaddy"
 	PROVIDER_VULTR      = "vultr"
 	PROVIDER_CLOUDFLARE = "cloudflare"
 )

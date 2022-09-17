@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"ryzenlo/to2cloud/internal/models"
 	"ryzenlo/to2cloud/internal/pkg/cloud"
+	"strings"
 
 	"encoding/json"
 
@@ -37,10 +38,14 @@ type ZoneRequest struct {
 }
 
 type CertRequest struct {
-	Hostnames       []string `json:"hostnames"`
+	RSAKeyID        int      `json:"rsa_key_id"  binding:"required"`
+	Hostnames       []string `json:"hostnames"  binding:"required"`
 	RequestType     string   `json:"request_type"`
 	RequestValidity int      `json:"requested_validity"`
-	CSR             string   `json:"csr"`
+}
+
+type UpdateSSLSettingRequest struct {
+	Value string `json:"value"  binding:"required"`
 }
 
 func checkCloudflareAPI(c *gin.Context) {
@@ -192,7 +197,7 @@ func updateCloudflareZoneDNSRecord(c *gin.Context) {
 }
 
 func getCloudflareCertificates(c *gin.Context) {
-	cf, _, err := getCloudflare(c)
+	_, cloudProvider, err := getCloudflare(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
@@ -202,13 +207,8 @@ func getCloudflareCertificates(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
-	opt := cloudflare.OriginCACertificateListOptions{ZoneID: uriParam.ZoneID}
-	certs, err := cf.OriginCertificates(context.Background(), opt)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": certs})
+	sslCerts := models.GetSSLCertList(cloudProvider.ID, uriParam.ZoneID)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": sslCerts})
 }
 
 func createCloudflareCertificate(c *gin.Context) {
@@ -227,11 +227,17 @@ func createCloudflareCertificate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
+	//
+	localRsaKey := models.GetRSAKeyBy(certReq.RSAKeyID)
+	if localRsaKey.ID == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "cannot find the rsa key to create a new certificate"})
+		return
+	}
 	cert := cloudflare.OriginCACertificate{
 		Hostnames:       certReq.Hostnames,
 		RequestType:     certReq.RequestType,
 		RequestValidity: certReq.RequestValidity,
-		CSR:             certReq.CSR,
+		CSR:             localRsaKey.CsrCert,
 	}
 	req4log, _ := ioutil.ReadAll(c.Request.Body)
 	recordResponse, err := cf.CreateOriginCertificate(context.Background(), cert)
@@ -241,16 +247,84 @@ func createCloudflareCertificate(c *gin.Context) {
 		return
 	}
 	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, string(req4log), "")
-	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": recordResponse})
+	//
+	sslCert := &models.CloudProviderSSLCert{
+		CloudProviderID: cloudProvider.ID,
+		ZoneID:          uriParam.ZoneID,
+		HostNames:       strings.Join(certReq.Hostnames, ","),
+		ExpiresOn:       recordResponse.ExpiresOn.Unix(),
+		LocalRSAKeyID:   certReq.RSAKeyID,
+		CertificateID:   recordResponse.ID,
+		Certificate:     recordResponse.Certificate,
+	}
+	if err := models.CreateSSLCert(sslCert); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "failed to save into database"})
+		return
+	}
+	//
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": sslCert})
+}
+
+func getCloudflareSSLSetting(c *gin.Context) {
+	cf, _, err := getCloudflare(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	var uriParam CloudflareZoneURIParam
+	if err := c.ShouldBindUri(&uriParam); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	sslSettingsResponse, err := cf.ZoneSSLSettings(context.Background(), uriParam.ZoneID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": sslSettingsResponse})
+}
+
+func updateCloudflareSSLSetting(c *gin.Context) {
+	cf, cloudProvider, err := getCloudflare(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	var uriParam CloudflareZoneURIParam
+	if err := c.ShouldBindUri(&uriParam); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	var updateReq UpdateSSLSettingRequest
+	if err := c.ShouldBindJSON(&updateReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	req4log, _ := ioutil.ReadAll(c.Request.Body)
+
+	updateResponse, err := cf.UpdateZoneSSLSettings(context.Background(), uriParam.ZoneID, updateReq.Value)
+	if err != nil {
+		logAPICall(c, cloudProvider, models.APICALL_FAILED, string(req4log), err.Error())
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("failed to update ssl settings, %s", err.Error())})
+		return
+	}
+	resp4log, _ := json.Marshal(updateResponse)
+
+	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, string(req4log), string(resp4log))
+	c.JSON(http.StatusOK, SuccessOperationResponse)
 }
 
 func getCloudflare(c *gin.Context) (*cloud.Cloudflare, *models.CloudProvider, error) {
-	var cf *cloud.Cloudflare
 	var cloudParam CloudflareURIParam
 	if err := c.ShouldBindUri(&cloudParam); err != nil {
 		return nil, nil, err
 	}
-	cloudProvider := models.GetCloudProviderByID(cloudParam.ID)
+	return getCloudflareProviderAndClient(cloudParam.ID)
+}
+
+func getCloudflareProviderAndClient(cloudProviderID int) (*cloud.Cloudflare, *models.CloudProvider, error) {
+	var cf *cloud.Cloudflare
+	cloudProvider := models.GetCloudProviderByID(cloudProviderID)
 	if cloudProvider == nil || cloudProvider.Name != models.PROVIDER_CLOUDFLARE {
 		return nil, nil, fmt.Errorf("no such cloud provider")
 	}

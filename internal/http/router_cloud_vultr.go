@@ -10,6 +10,7 @@ import (
 	"ryzenlo/to2cloud/internal/pkg/ansible"
 	"ryzenlo/to2cloud/internal/pkg/cloud"
 	"ryzenlo/to2cloud/internal/pkg/log"
+	"ryzenlo/to2cloud/internal/pkg/util"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,8 +34,7 @@ type RunPlayBookJsonParam struct {
 }
 
 type SSHKeyParam struct {
-	Name   string `json:"name" binding:"required"`
-	SSHKey string `json:"ssh_key" binding:"required"`
+	RSAKeyID int `json:"rsa_key_id" binding:"required"`
 }
 
 func checkVultrAPI(c *gin.Context) {
@@ -80,9 +80,14 @@ func addVultrSSHKey(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
+	RSAKey := models.GetRSAKeyBy(reqParam.RSAKeyID)
+	if RSAKey.ID == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "RSA key pair for ssh does not exist."})
+		return
+	}
 	req := &govultr.SSHKeyReq{
-		Name:   reqParam.Name,
-		SSHKey: reqParam.SSHKey,
+		Name:   RSAKey.Name,
+		SSHKey: RSAKey.PublicKey,
 	}
 	//log call operation
 	requestBody, _ := json.Marshal(req)
@@ -94,6 +99,13 @@ func addVultrSSHKey(c *gin.Context) {
 	}
 	apiResponse, _ := json.Marshal(sshkey)
 	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, string(requestBody), string(apiResponse))
+	//
+	sub := models.CloudSSHSubject{
+		CloudProviderID: cloudProvider.ID,
+		SSHKeyID:        sshkey.ID,
+	}
+	models.UpdateSSHSubject(RSAKey, sub)
+	//
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": sshkey})
 }
 
@@ -186,12 +198,23 @@ func createVultrInstance(c *gin.Context) {
 		OSID        int    `json:"os_id" binding:"required"`
 		Plan        string `json:"plan" binding:"required"`
 		Region      string `json:"region" binding:"required"`
-		SSHKeyID    string `json:"ssh_key_id" binding:"required"`
+		RSAKeyID    int    `json:"rsa_key_id" binding:"required"`
 		InstalledBy string `json:"installed_by" binding:"required"`
 		SnapshotID  string `json:"snapshot_id"`
 	}
 	if err := c.ShouldBindJSON(&instanceReq); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	//
+	RSAKey := models.GetRSAKeyBy(instanceReq.RSAKeyID)
+	if RSAKey.ID == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "RSA key pair for ssh does not exist."})
+		return
+	}
+	sshSub := RSAKey.GetCloudSSHSubject()
+	if sshSub.CloudProviderID == 0 || sshSub.SSHKeyID == "" {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "SSH key does not exist, please create it in vultr."})
 		return
 	}
 	//
@@ -203,7 +226,7 @@ func createVultrInstance(c *gin.Context) {
 		OsID:    instanceReq.OSID,
 		Plan:    instanceReq.Plan,
 		Region:  instanceReq.Region,
-		SSHKeys: []string{instanceReq.SSHKeyID},
+		SSHKeys: []string{sshSub.SSHKeyID},
 		Backups: "disabled",
 	}
 	if instanceReq.InstalledBy == models.OS_INSTALLED_BY_SNAPSHOT {
@@ -228,6 +251,14 @@ func createVultrInstance(c *gin.Context) {
 	apiResponse, _ := json.Marshal(instance)
 	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, string(requestBody), string(apiResponse))
 	//
+	cpv := &models.CloudProviderVPS{
+		CloudProviderID: cloudProvider.ID,
+		InstanceID:      instance.ID,
+		LocalRSAKeyID:   instanceReq.RSAKeyID,
+		Status:          instance.Status,
+	}
+	models.CreateLocalVPS(cpv)
+	//
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": instance})
 }
 
@@ -243,7 +274,8 @@ func updateVultrInstance(c *gin.Context) {
 		return
 	}
 	var instanceReq struct {
-		Label string `json:"label" binding:"required"`
+		Label   string              `json:"label" binding:"required"`
+		CDNInfo models.SetupCDNInfo `json:"cdn_info" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&instanceReq); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
@@ -259,6 +291,17 @@ func updateVultrInstance(c *gin.Context) {
 	}
 	apiResponse, _ := json.Marshal(instance)
 	logAPICall(c, cloudProvider, models.APICALL_SUCCESS, string(requestBody), string(apiResponse))
+	//
+	vps := models.GetLocalVPSBy(vultrParam.InstanceID)
+	vps.Status = instance.Status
+	if vps.ID != 0 {
+		rawCDNInfo, err := json.Marshal(instanceReq.CDNInfo)
+		if err == nil {
+			vps.CDNInfo = string(rawCDNInfo)
+		}
+	}
+	models.EditLocalVPS(&vps)
+	//
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "success", "data": instance})
 }
 
@@ -282,13 +325,27 @@ func delVultrInstance(c *gin.Context) {
 	c.JSON(http.StatusOK, SuccessOperationResponse)
 }
 
-func getRunPlaybookLogs(c *gin.Context) {
-	var vultrParam VultrURIParam
+func GetLocalVPS(c *gin.Context) {
+	var vultrParam VultrInstanceURIParam
 	if err := c.ShouldBindUri(&vultrParam); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
-	playLogs := models.GetAnsibleOpsLogsByProvider(vultrParam.ID, 1, 20)
+	vps := models.GetLocalVPSBy(vultrParam.InstanceID)
+	if vps.ID == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "VPS does not exist!"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "success", "data": vps})
+}
+
+func getAnsibleOpsLogs(c *gin.Context) {
+	var vultrParam VultrInstanceURIParam
+	if err := c.ShouldBindUri(&vultrParam); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	playLogs := models.GetAnsibleOpsLogsBy(vultrParam.ID, vultrParam.InstanceID, 1, 20)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "data": playLogs})
 }
 
@@ -304,12 +361,25 @@ func runPlaybookOnVultrInstance(c *gin.Context) {
 		return
 	}
 	var req struct {
-		PlaybookName string              `json:"playbook_name" binding:"required"`
-		ProxyConfig  configs.ProxyConfig `json:"proxy_config"`
+		PlaybookName      string              `json:"playbook_name" binding:"required"`
+		PlaybookVariables map[string]string   `json:"playbook_variable"`
+		ProxyConfig       configs.ProxyConfig `json:"proxy_config"`
 	}
 	//
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	//
+	localVPS := models.GetLocalVPSBy(vultrParam.InstanceID)
+	if localVPS.ID == 0 || localVPS.LocalRSAKeyID == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "RSA key does not exist in the VPS instance."})
+		return
+	}
+	//
+	RSAKey := models.GetRSAKeyBy(localVPS.LocalRSAKeyID)
+	if RSAKey.ID == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "RSA key does not exist."})
 		return
 	}
 	//
@@ -318,29 +388,58 @@ func runPlaybookOnVultrInstance(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": "something went wrong when calling vultr api"})
 		return
 	}
+	extraVariable4Ansible := map[string]string{}
+	//get domain certs and key files as playbook variables
+	var tmpSSLCertFiles *util.TempSSLCertFiles
+	cdnInfo, err := localVPS.GetSetupCDNInfo()
+	if err == nil {
+		extraVariable4Ansible["hostname"] = cdnInfo.Domain
+		//
+		sslCerts := models.GetSSLCertList(cdnInfo.CloudProviderID, cdnInfo.ZoneID)
+		if len(sslCerts) > 0 {
+			sslCert := sslCerts[0]
+			sslCertRSAKey := models.GetRSAKeyBy(sslCert.LocalRSAKeyID)
+			if sslCertRSAKey.ID != 0 {
+				tmpSSLCertFiles, err = util.NewTempSSLCertFiles(sslCert.Certificate, sslCertRSAKey.PrivateKey)
+				if err == nil {
+					extraVariable4Ansible["cert_path"] = tmpSSLCertFiles.GetCertificatePath()
+					extraVariable4Ansible["private_key_path"] = tmpSSLCertFiles.GetPrivateKeyPath()
+				}
+			}
+		}
+	}
+
 	inventory := ansible.Inventory{
 		Name:          "vps",
 		Host:          instance.MainIP,
 		User:          "root",
-		SSHPrivateKey: vl.APIConfig.SSHPrivateKey,
+		SSHPrivateKey: RSAKey.PrivateKey,
 	}
-	cmd, err := ansible.NewPlayCmd(configs.Conf, req.PlaybookName, inventory, req.ProxyConfig, nil)
+	cmd, err := ansible.NewPlayCmd(configs.Conf, req.PlaybookName, inventory, req.ProxyConfig, extraVariable4Ansible)
 	if err != nil {
+		//
+		util.RemoveAllSSLTmpFiles(tmpSSLCertFiles)
+		//
 		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("something went wrong when creating ansible playbook command,%v", err)})
 		return
 	}
 	if err := cmd.CheckPlaybookSyntax(); err != nil {
+		//
+		util.RemoveAllSSLTmpFiles(tmpSSLCertFiles)
+		//
 		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("cannot execute ansible playbook,%v", err)})
 		return
 	}
 	//log run playbook ops
 	var playLog = models.AnsibleOpsLogs{
-		CloudProviderID:   cloudProvider.ID,
-		InstanceID:        instance.ID,
-		AnsiblePlaybook:   cmd.GetPlayBookContent(),
-		AnsibleHostConfig: cmd.GetInventoryContent(),
-		PlayCmd:           cmd.GetFullCmd(),
-		Status:            models.ANSIBLE_STATUS_CREATED,
+		CloudProviderID:        cloudProvider.ID,
+		InstanceID:             instance.ID,
+		AnsiblePlaybookName:    req.PlaybookName,
+		AnsiblePlaybookContent: cmd.GetPlayBookContent(),
+		AnsibleExtraVariables:  cmd.GetAnsibleExtraVariables(),
+		AnsibleHostConfig:      cmd.GetInventoryContent(),
+		PlayCmd:                cmd.GetFullCmd(),
+		Status:                 models.ANSIBLE_STATUS_CREATED,
 	}
 	if err := models.AddAnsibleOpsLog(&playLog); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": fmt.Sprintf("cannot log runing playbook ops,%v", err)})
@@ -348,6 +447,8 @@ func runPlaybookOnVultrInstance(c *gin.Context) {
 	}
 	//run playbook in another goroutine, and end serving the api, let the client issue its latest ops result
 	go func() {
+		defer cmd.Clean()
+		defer util.RemoveAllSSLTmpFiles(tmpSSLCertFiles)
 		playLog.Status = models.ANSIBLE_STATUS_RUNNING
 		models.ReplaceAnsibleOpsLog(&playLog)
 		//run

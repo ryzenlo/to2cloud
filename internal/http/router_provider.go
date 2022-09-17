@@ -19,7 +19,7 @@ type ProviderParam struct {
 	Type             string                     `json:"type" gorm:"column:type" binding:"required"`
 	VultrConfig      models.VultrAPIConfig      `json:"vultr_config"`
 	CloudflareConfig models.CloudflareAPIConfig `json:"cloudflare_config"`
-	Godaddy          models.GodaddyAPIConfig    `json:"godaddy_config"`
+	GodaddyConfig    models.GodaddyAPIConfig    `json:"godaddy_config"`
 }
 
 func GetProviders(c *gin.Context) {
@@ -124,9 +124,10 @@ func formCloudConfigFromRequestParam(param *ProviderParam) (string, error) {
 		}
 		configBytes, err = json.Marshal(param.VultrConfig)
 	} else {
-		if param.Godaddy.APIKey == "" || param.Godaddy.APISecret == "" {
+		if param.GodaddyConfig.APIKey == "" || param.GodaddyConfig.APISecret == "" {
 			return config, fmt.Errorf("for calling godaddy api, you need to provide apikey and apisecret")
 		}
+		configBytes, err = json.Marshal(param.GodaddyConfig)
 	}
 	if err != nil {
 		return "", err
