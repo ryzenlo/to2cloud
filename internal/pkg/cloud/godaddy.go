@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"ryzenlo/to2cloud/internal/models"
+	"ryzenlo/to2cloud/internal/pkg/log"
 )
 
 const GODADDY_BASEURI = "https://api.godaddy.com"
@@ -87,8 +88,14 @@ func (g *Godaddy) ListDomains(ctx context.Context) ([]GodaddyDomain, error) {
 	return domains, nil
 }
 
-func (g *Godaddy) EditDomain(ctx context.Context, d GodaddyDomain) error {
-	url := fmt.Sprintf("%s/v1/domains/%s", GODADDY_BASEURI, d.Domain)
+func (g *Godaddy) EditDomain(ctx context.Context, domain string, nameServers []string) error {
+	url := fmt.Sprintf("%s/v1/domains/%s", GODADDY_BASEURI, domain)
+
+	d := struct {
+		NameServers []string `json:"nameServers"`
+	}{
+		NameServers: nameServers,
+	}
 	//
 	buf := new(bytes.Buffer)
 	if err := json.NewEncoder(buf).Encode(&d); err != nil {
@@ -108,7 +115,15 @@ func (g *Godaddy) EditDomain(ctx context.Context, d GodaddyDomain) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("something went wrong when calling godaddy api")
+		raw, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("something went wrong when reading response from godaddy api")
+		}
+		if resp.StatusCode < 300 {
+			log.Logger.Warn(string(raw))
+			return nil
+		}
+		return fmt.Errorf("something went wrong when calling godaddy api, http code = %d, %s", resp.StatusCode, string(raw))
 	}
 	return nil
 }

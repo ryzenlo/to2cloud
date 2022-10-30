@@ -71,11 +71,8 @@ func editGodaddyDomain(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
-	gdReq := cloud.GodaddyDomain{
-		NameServers: domainReq.NameServers,
-	}
 	//
-	err = gd.EditDomain(context.Background(), gdReq)
+	err = gd.EditDomain(context.Background(), reqParam.Domain, domainReq.NameServers)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": err.Error()})
 		return
